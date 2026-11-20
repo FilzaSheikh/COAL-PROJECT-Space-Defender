@@ -1,0 +1,1265 @@
+INCLUDE Irvine32.inc
+
+MAX_BULLETS   = 8
+MAX_ENEMIES   = 6
+MAX_LIVES     = 5
+PLAYER_Y      = 21
+TOP_ROW       = 2
+PLAYER_MIN    = 2
+PLAYER_MAX    = 57
+FRAME_MS      = 40
+NAME_MAX      = 15
+FILE_BUF_SIZE = 4096
+SHOW_RECORDS  = 15
+KEY_LEFT      = 25h
+KEY_RIGHT     = 27h
+
+SHOWLINE MACRO rowN, colN, clr, txt
+    mov dh, rowN
+    mov dl, colN
+    mov bl, clr
+    mov esi, OFFSET txt
+    call PrintAt
+ENDM
+
+.data
+tS1 BYTE " ____   ____      _      ____  _____ ",0
+tS2 BYTE "/ ___| |  _ \    / \    / ___|| ____|",0
+tS3 BYTE "\___ \ | |_) |  / _ \  | |    |  _|  ",0
+tS4 BYTE " ___) ||  __/ / ___ \ | |___ | |___ ",0
+tS5 BYTE "|____/ |_|    /_/   \_\ \____||_____|",0
+tSub BYTE "~ ~ ~   D  E  F  E  N  D  E  R   ~ ~ ~",0
+tShip1 BYTE "/A\",0
+tShip2 BYTE "/_|_\",0
+mOpt1 BYTE "1.  Start Game",0
+mOpt2 BYTE "2.  Instructions",0
+mOpt3 BYTE "3.  High Scores",0
+mOpt4 BYTE "4.  Exit",0
+mPrompt BYTE "Enter your choice (1-4): ",0
+mHigh BYTE "Current High Score: ",0
+msgInvalid BYTE "Invalid choice! Please press 1, 2, 3 or 4.",0
+
+iTitle BYTE "=== INSTRUCTIONS ===",0
+iL1 BYTE "Defend space! Destroy the enemies before they hit your ship.",0
+iL2 BYTE "A / Left Arrow   : move left",0
+iL3 BYTE "D / Right Arrow  : move right",0
+iL4 BYTE "SPACE            : fire bullets",0
+iL5 BYTE "ESC              : quit the current game",0
+iL6 BYTE "W = enemy (10 pts)    # = fast enemy (20 pts)",0
+iL7 BYTE "+ = extra life        R = rapid fire",0
+iL8 BYTE "Colliding with an enemy costs 1 life. Enemies that slip past are harmless.",0
+iL9 BYTE "Every 100 points raises the level and the enemy speed.",0
+
+namePrompt BYTE "ENTER YOUR NAME (max 15 chars):",0
+defaultName BYTE "Player",0
+playerName BYTE NAME_MAX+1 DUP(0)
+
+lblScore BYTE "SCORE:",0
+lblLevel BYTE "LEVEL:",0
+lblLives BYTE "LIVES:",0
+lblHigh  BYTE "HIGH:",0
+lblRapid BYTE "RAPID",0
+lblNoRapid BYTE "     ",0
+lblFooter BYTE "A/D or Arrows = Move   SPACE = Fire   ESC = Quit",0
+
+shipStr   BYTE "/A\",0
+shipBlank BYTE "   ",0
+
+g1 BYTE "  ____    _    __  __ _____    _____     _______ ____  ",0
+g2 BYTE " / ___|  / \  |  \/  | ____|  / _ \ \   / / ____|  _ \ ",0
+g3 BYTE "| |  _  / _ \ | |\/| |  _|   | | | \ \ / /|  _| | |_) |",0
+g4 BYTE "| |_| |/ ___ \| |  | | |___  | |_| |\ V / | |___|  _ < ",0
+g5 BYTE " \____/_/   \_\_|  |_|_____|  \___/  \_/  |_____|_| \_\",0
+goName  BYTE "Player     : ",0
+goScore BYTE "Final Score : ",0
+goHigh  BYTE "High Score  : ",0
+goNewHigh BYTE "*** NEW HIGH SCORE! ***",0
+goSaved BYTE "Record saved to scores.txt",0
+goSaveErr BYTE "Error: could not save record!",0
+goFull BYTE "Score file is full - record not saved.",0
+goOpt1 BYTE "1. Play Again",0
+goOpt2 BYTE "2. Main Menu",0
+goOpt3 BYTE "3. Exit",0
+
+hsTitle BYTE "=== HIGH SCORES ===",0
+hsHead  BYTE "NAME   SCORE   (last 15 records)",0
+hsHighest BYTE "Highest score: ",0
+hsNone  BYTE "No scores saved yet. Go play a game!",0
+hsErr   BYTE "Error reading the score file.",0
+
+fileName   BYTE "scores.txt",0
+fileHandle DWORD 0
+bytesRead  DWORD 0
+totalLen   DWORD 0
+fileBuffer BYTE FILE_BUF_SIZE DUP(0)
+saveStatus BYTE 0
+highScore  DWORD 0
+newHighFlag BYTE 0
+
+score       DWORD 0
+playerX     BYTE 30
+lives       BYTE 3
+level       BYTE 1
+gameRunning BYTE 1
+moveDir     SBYTE 0
+fireFlag    BYTE 0
+fireCooldown BYTE 0
+rapidTimer  BYTE 0
+hitTimer    BYTE 0
+
+bulletX      BYTE MAX_BULLETS DUP(0)
+bulletY      BYTE MAX_BULLETS DUP(0)
+bulletActive BYTE MAX_BULLETS DUP(0)
+
+enemyX      BYTE MAX_ENEMIES DUP(0)
+enemyY      BYTE MAX_ENEMIES DUP(0)
+enemyActive BYTE MAX_ENEMIES DUP(0)
+enemyType   BYTE MAX_ENEMIES DUP(0)
+slowTimer   BYTE 0
+fastTimer   BYTE 0
+enemyDelay  BYTE 11
+fastDelay   BYTE 5
+maxEnemies  BYTE 3
+moveSlow    BYTE 0
+moveFast    BYTE 0
+
+powActive BYTE 0
+powX      BYTE 0
+powY      BYTE 0
+powType   BYTE 0
+powTimer  BYTE 0
+
+.code
+main PROC
+    call Randomize
+    call LoadHighScore
+
+MenuLoop:
+    call DisplayMenu
+MenuInput:
+    call ReadChar
+    cmp al, '1'
+    je DoStart
+    cmp al, '2'
+    je DoInstr
+    cmp al, '3'
+    je DoScores
+    cmp al, '4'
+    je DoExit
+    SHOWLINE 19, 15, lightRed, msgInvalid
+    jmp MenuInput
+
+DoInstr:
+    call DisplayInstructions
+    jmp MenuLoop
+DoScores:
+    call DisplayHighScores
+    jmp MenuLoop
+
+DoStart:
+    call GetPlayerName
+PlayAgain:
+    call InitializeGame
+    call GameLoop
+    call GameOver
+    cmp eax, 1
+    je PlayAgain
+    cmp eax, 2
+    je MenuLoop
+
+DoExit:
+    call CloseGameFiles
+    mov eax, lightGray
+    call SetTextColor
+    call Clrscr
+    exit
+main ENDP
+
+DrawCell PROC
+    pushad
+    push eax
+    call Gotoxy
+    movzx eax, bl
+    call SetTextColor
+    pop eax
+    call WriteChar
+    popad
+    ret
+DrawCell ENDP
+
+EraseCell PROC
+    push eax
+    push ebx
+    mov al, ' '
+    mov bl, white
+    call DrawCell
+    pop ebx
+    pop eax
+    ret
+EraseCell ENDP
+
+PrintAt PROC
+    pushad
+    call Gotoxy
+    movzx eax, bl
+    call SetTextColor
+    mov edx, esi
+    call WriteString
+    popad
+    ret
+PrintAt ENDP
+
+PrintNumAt PROC
+    pushad
+    push eax
+    call Gotoxy
+    movzx eax, bl
+    call SetTextColor
+    pop eax
+    call WriteDec
+    popad
+    ret
+PrintNumAt ENDP
+
+DisplayMenu PROC
+    pushad
+    call Clrscr
+    SHOWLINE 1, 20, lightCyan, tS1
+    SHOWLINE 2, 20, lightCyan, tS2
+    SHOWLINE 3, 20, lightCyan, tS3
+    SHOWLINE 4, 20, lightCyan, tS4
+    SHOWLINE 5, 20, lightCyan, tS5
+    SHOWLINE 7, 20, yellow, tSub
+    SHOWLINE 9, 37, lightGreen, tShip1
+    SHOWLINE 10, 36, lightGreen, tShip2
+    SHOWLINE 12, 30, white, mOpt1
+    SHOWLINE 13, 30, white, mOpt2
+    SHOWLINE 14, 30, white, mOpt3
+    SHOWLINE 15, 30, white, mOpt4
+    SHOWLINE 17, 25, lightGray, mPrompt
+    SHOWLINE 21, 25, yellow, mHigh
+    mov eax, highScore
+    mov dl, 45
+    mov dh, 21
+    mov bl, yellow
+    call PrintNumAt
+    mov dl, 50
+    mov dh, 17
+    call Gotoxy
+    popad
+    ret
+DisplayMenu ENDP
+
+DisplayInstructions PROC
+    pushad
+    call Clrscr
+    SHOWLINE 1, 28, yellow, iTitle
+    SHOWLINE 4, 8, white, iL1
+    SHOWLINE 6, 8, lightCyan, iL2
+    SHOWLINE 7, 8, lightCyan, iL3
+    SHOWLINE 8, 8, lightCyan, iL4
+    SHOWLINE 9, 8, lightCyan, iL5
+    SHOWLINE 11, 8, lightRed, iL6
+    SHOWLINE 12, 8, lightGreen, iL7
+    SHOWLINE 14, 8, white, iL8
+    SHOWLINE 15, 8, white, iL9
+    mov dl, 0
+    mov dh, 18
+    call Gotoxy
+    mov eax, lightGray
+    call SetTextColor
+    call WaitMsg
+    popad
+    ret
+DisplayInstructions ENDP
+
+GetPlayerName PROC
+    pushad
+    call Clrscr
+    SHOWLINE 8, 20, yellow, namePrompt
+    mov dl, 20
+    mov dh, 10
+    call Gotoxy
+    mov eax, white
+    call SetTextColor
+    mov edx, OFFSET playerName
+    mov ecx, NAME_MAX
+    call ReadString
+    cmp eax, 0
+    jne GN_Fix
+    mov esi, OFFSET defaultName
+    mov edi, OFFSET playerName
+GN_Copy:
+    mov al, [esi]
+    mov [edi], al
+    inc esi
+    inc edi
+    cmp al, 0
+    jne GN_Copy
+    jmp GN_Done
+GN_Fix:
+    mov esi, OFFSET playerName
+GN_Loop:
+    mov al, [esi]
+    cmp al, 0
+    je GN_Done
+    cmp al, ' '
+    jne GN_Next
+    mov BYTE PTR [esi], '_'
+GN_Next:
+    inc esi
+    jmp GN_Loop
+GN_Done:
+    popad
+    ret
+GetPlayerName ENDP
+
+InitializeGame PROC
+    pushad
+    mov score, 0
+    mov playerX, 30
+    mov lives, 3
+    mov level, 1
+    mov gameRunning, 1
+    mov moveDir, 0
+    mov fireFlag, 0
+    mov fireCooldown, 0
+    mov rapidTimer, 0
+    mov hitTimer, 0
+    mov slowTimer, 0
+    mov fastTimer, 0
+    mov enemyDelay, 11
+    mov fastDelay, 5
+    mov maxEnemies, 3
+    mov powActive, 0
+    mov powTimer, 0
+    mov newHighFlag, 0
+    mov saveStatus, 0
+
+    mov ecx, MAX_BULLETS
+    mov esi, 0
+IG_B:
+    mov bulletActive[esi], 0
+    inc esi
+    loop IG_B
+
+    mov ecx, MAX_ENEMIES
+    mov esi, 0
+IG_E:
+    mov enemyActive[esi], 0
+    inc esi
+    loop IG_E
+
+    call Clrscr
+    call DrawBorder
+    popad
+    ret
+InitializeGame ENDP
+
+DrawBorder PROC
+    pushad
+    mov dl, 0
+DB_H:
+    mov al, '='
+    mov bl, gray
+    mov dh, 1
+    call DrawCell
+    mov dh, 23
+    call DrawCell
+    inc dl
+    cmp dl, 60
+    jb DB_H
+
+    mov dh, TOP_ROW
+DB_V:
+    mov al, '|'
+    mov bl, gray
+    mov dl, 0
+    call DrawCell
+    mov dl, 59
+    call DrawCell
+    inc dh
+    cmp dh, 23
+    jb DB_V
+
+    SHOWLINE 0, 1, lightCyan, lblScore
+    SHOWLINE 0, 16, lightCyan, lblLevel
+    SHOWLINE 0, 28, lightCyan, lblLives
+    SHOWLINE 0, 40, lightCyan, lblHigh
+    SHOWLINE 24, 1, gray, lblFooter
+    popad
+    ret
+DrawBorder ENDP
+
+GameLoop PROC
+GL_Top:
+    call ReadPlayerInput
+    cmp gameRunning, 0
+    je GL_End
+    call MovePlayer
+    call UpdateBullets
+    call UpdateEnemies
+    call UpdatePowerup
+    call CheckCollisions
+    call DrawGame
+    cmp lives, 0
+    je GL_End
+    mov eax, FRAME_MS
+    call Delay
+    jmp GL_Top
+GL_End:
+    ret
+GameLoop ENDP
+
+ReadPlayerInput PROC
+    pushad
+    mov moveDir, 0
+    mov fireFlag, 0
+RPI_Loop:
+    call ReadKey
+    jz RPI_Done
+    cmp dx, KEY_LEFT
+    je RPI_Left
+    cmp dx, KEY_RIGHT
+    je RPI_Right
+    cmp al, 27
+    je RPI_Esc
+    cmp al, 'a'
+    je RPI_Left
+    cmp al, 'A'
+    je RPI_Left
+    cmp al, 'd'
+    je RPI_Right
+    cmp al, 'D'
+    je RPI_Right
+    cmp al, ' '
+    je RPI_Fire
+    jmp RPI_Loop
+RPI_Left:
+    mov moveDir, -1
+    jmp RPI_Loop
+RPI_Right:
+    mov moveDir, 1
+    jmp RPI_Loop
+RPI_Fire:
+    mov fireFlag, 1
+    jmp RPI_Loop
+RPI_Esc:
+    mov gameRunning, 0
+RPI_Done:
+    popad
+    ret
+ReadPlayerInput ENDP
+
+MovePlayer PROC
+    pushad
+    cmp fireCooldown, 0
+    je MP_Rapid
+    dec fireCooldown
+MP_Rapid:
+    cmp rapidTimer, 0
+    je MP_Dir
+    dec rapidTimer
+MP_Dir:
+    cmp moveDir, 0
+    je MP_Fire
+    mov dl, playerX
+    dec dl
+    mov dh, PLAYER_Y
+    mov bl, white
+    mov esi, OFFSET shipBlank
+    call PrintAt
+    movsx eax, moveDir
+    add eax, eax
+    movzx ebx, playerX
+    add ebx, eax
+    cmp ebx, PLAYER_MIN
+    jge MP_ChkMax
+    mov ebx, PLAYER_MIN
+MP_ChkMax:
+    cmp ebx, PLAYER_MAX
+    jle MP_Store
+    mov ebx, PLAYER_MAX
+MP_Store:
+    mov playerX, bl
+MP_Fire:
+    cmp fireFlag, 0
+    je MP_End
+    cmp fireCooldown, 0
+    jne MP_End
+    call FireBullet
+MP_End:
+    popad
+    ret
+MovePlayer ENDP
+
+FireBullet PROC
+    pushad
+    mov esi, 0
+FB_Find:
+    cmp esi, MAX_BULLETS
+    jae FB_Done
+    cmp bulletActive[esi], 0
+    je FB_Found
+    inc esi
+    jmp FB_Find
+FB_Found:
+    mov al, playerX
+    mov bulletX[esi], al
+    mov bulletY[esi], PLAYER_Y-1
+    mov bulletActive[esi], 1
+    mov fireCooldown, 4
+    cmp rapidTimer, 0
+    je FB_Done
+    mov fireCooldown, 2
+FB_Done:
+    popad
+    ret
+FireBullet ENDP
+
+UpdateBullets PROC
+    pushad
+    mov esi, 0
+UB_Loop:
+    cmp esi, MAX_BULLETS
+    jae UB_Done
+    cmp bulletActive[esi], 0
+    je UB_Next
+    mov dl, bulletX[esi]
+    mov dh, bulletY[esi]
+    call EraseCell
+    dec bulletY[esi]
+    cmp bulletY[esi], TOP_ROW
+    jae UB_Next
+    mov bulletActive[esi], 0
+UB_Next:
+    inc esi
+    jmp UB_Loop
+UB_Done:
+    popad
+    ret
+UpdateBullets ENDP
+
+UpdateEnemies PROC
+    pushad
+    mov moveSlow, 0
+    mov moveFast, 0
+    inc slowTimer
+    mov al, enemyDelay
+    cmp slowTimer, al
+    jb UE_Fast
+    mov moveSlow, 1
+    mov slowTimer, 0
+UE_Fast:
+    inc fastTimer
+    mov al, fastDelay
+    cmp fastTimer, al
+    jb UE_Count
+    mov moveFast, 1
+    mov fastTimer, 0
+
+UE_Count:
+    xor ecx, ecx
+    mov esi, 0
+UE_CLoop:
+    cmp esi, MAX_ENEMIES
+    jae UE_CDone
+    cmp enemyActive[esi], 0
+    je UE_CNext
+    inc ecx
+UE_CNext:
+    inc esi
+    jmp UE_CLoop
+UE_CDone:
+    movzx eax, maxEnemies
+    cmp ecx, eax
+    jae UE_Move
+    mov eax, 8
+    call RandomRange
+    cmp eax, 0
+    jne UE_Move
+    call SpawnEnemy
+
+UE_Move:
+    mov esi, 0
+UE_MLoop:
+    cmp esi, MAX_ENEMIES
+    jae UE_Done
+    cmp enemyActive[esi], 0
+    je UE_MNext
+    cmp enemyType[esi], 2
+    je UE_IsFast
+    cmp moveSlow, 0
+    je UE_MNext
+    jmp UE_Step
+UE_IsFast:
+    cmp moveFast, 0
+    je UE_MNext
+UE_Step:
+    mov dl, enemyX[esi]
+    mov dh, enemyY[esi]
+    call EraseCell
+    inc enemyY[esi]
+    cmp enemyY[esi], PLAYER_Y
+    jbe UE_MNext
+    mov enemyActive[esi], 0
+UE_MNext:
+    inc esi
+    jmp UE_MLoop
+UE_Done:
+    popad
+    ret
+UpdateEnemies ENDP
+
+SpawnEnemy PROC
+    pushad
+    mov esi, 0
+SE_Find:
+    cmp esi, MAX_ENEMIES
+    jae SE_Done
+    cmp enemyActive[esi], 0
+    je SE_Found
+    inc esi
+    jmp SE_Find
+SE_Found:
+    mov eax, 58
+    call RandomRange
+    inc al
+    mov enemyX[esi], al
+    mov enemyY[esi], TOP_ROW
+    mov enemyType[esi], 1
+    cmp level, 2
+    jb SE_Set
+    mov eax, 4
+    call RandomRange
+    cmp eax, 0
+    jne SE_Set
+    mov enemyType[esi], 2
+SE_Set:
+    mov enemyActive[esi], 1
+SE_Done:
+    popad
+    ret
+SpawnEnemy ENDP
+
+UpdatePowerup PROC
+    pushad
+    cmp powActive, 0
+    jne UP_Move
+    mov eax, 200
+    call RandomRange
+    cmp eax, 0
+    jne UP_Done
+    mov eax, 58
+    call RandomRange
+    inc al
+    mov powX, al
+    mov powY, TOP_ROW
+    mov powTimer, 0
+    mov powActive, 1
+    mov eax, 2
+    call RandomRange
+    inc al
+    mov powType, al
+    jmp UP_Done
+UP_Move:
+    inc powTimer
+    cmp powTimer, 6
+    jb UP_Done
+    mov powTimer, 0
+    mov dl, powX
+    mov dh, powY
+    call EraseCell
+    inc powY
+    cmp powY, PLAYER_Y
+    jbe UP_Done
+    mov powActive, 0
+UP_Done:
+    popad
+    ret
+UpdatePowerup ENDP
+
+CheckCollisions PROC
+    call CheckBulletEnemy
+    call CheckPlayerEnemy
+    call CheckPlayerPowerup
+    ret
+CheckCollisions ENDP
+
+CheckBulletEnemy PROC
+    pushad
+    mov esi, 0
+CB_Bullet:
+    cmp esi, MAX_BULLETS
+    jae CB_Done
+    cmp bulletActive[esi], 0
+    je CB_NextB
+    mov edi, 0
+CB_Enemy:
+    cmp edi, MAX_ENEMIES
+    jae CB_NextB
+    cmp enemyActive[edi], 0
+    je CB_NextE
+    mov al, bulletX[esi]
+    cmp al, enemyX[edi]
+    jne CB_NextE
+    mov al, bulletY[esi]
+    cmp al, enemyY[edi]
+    je CB_Hit
+    inc al
+    cmp al, enemyY[edi]
+    jne CB_NextE
+CB_Hit:
+    mov dl, bulletX[esi]
+    mov dh, bulletY[esi]
+    call EraseCell
+    mov dl, enemyX[edi]
+    mov dh, enemyY[edi]
+    call EraseCell
+    mov bulletActive[esi], 0
+    mov enemyActive[edi], 0
+    movzx eax, enemyType[edi]
+    mov ebx, 10
+    mul ebx
+    call UpdateScore
+    jmp CB_NextB
+CB_NextE:
+    inc edi
+    jmp CB_Enemy
+CB_NextB:
+    inc esi
+    jmp CB_Bullet
+CB_Done:
+    popad
+    ret
+CheckBulletEnemy ENDP
+
+CheckPlayerEnemy PROC
+    pushad
+    mov esi, 0
+CP_Loop:
+    cmp esi, MAX_ENEMIES
+    jae CP_Done
+    cmp enemyActive[esi], 0
+    je CP_Next
+    cmp enemyY[esi], PLAYER_Y
+    jb CP_Next
+    movzx eax, enemyX[esi]
+    movzx ebx, playerX
+    dec ebx
+    cmp eax, ebx
+    jl CP_Next
+    add ebx, 2
+    cmp eax, ebx
+    jg CP_Next
+    mov dl, enemyX[esi]
+    mov dh, enemyY[esi]
+    call EraseCell
+    mov enemyActive[esi], 0
+    cmp lives, 0
+    je CP_Next
+    dec lives
+    mov hitTimer, 8
+CP_Next:
+    inc esi
+    jmp CP_Loop
+CP_Done:
+    popad
+    ret
+CheckPlayerEnemy ENDP
+
+CheckPlayerPowerup PROC
+    pushad
+    cmp powActive, 0
+    je CPP_Done
+    cmp powY, PLAYER_Y
+    jb CPP_Done
+    movzx eax, powX
+    movzx ebx, playerX
+    dec ebx
+    cmp eax, ebx
+    jl CPP_Done
+    add ebx, 2
+    cmp eax, ebx
+    jg CPP_Done
+    mov dl, powX
+    mov dh, powY
+    call EraseCell
+    mov powActive, 0
+    cmp powType, 1
+    jne CPP_Rapid
+    cmp lives, MAX_LIVES
+    jae CPP_Bonus
+    inc lives
+    jmp CPP_Bonus
+CPP_Rapid:
+    mov rapidTimer, 200
+CPP_Bonus:
+    mov eax, 20
+    call UpdateScore
+CPP_Done:
+    popad
+    ret
+CheckPlayerPowerup ENDP
+
+UpdateScore PROC
+    pushad
+    add score, eax
+    mov eax, score
+    xor edx, edx
+    mov ebx, 100
+    div ebx
+    inc eax
+    cmp eax, 10
+    jbe US_Lvl
+    mov eax, 10
+US_Lvl:
+    mov level, al
+    mov bl, 12
+    sub bl, al
+    mov enemyDelay, bl
+    shr bl, 1
+    cmp bl, 1
+    jae US_Fast
+    mov bl, 1
+US_Fast:
+    mov fastDelay, bl
+    movzx eax, level
+    xor edx, edx
+    mov ecx, 3
+    div ecx
+    add eax, 3
+    cmp eax, MAX_ENEMIES
+    jbe US_Max
+    mov eax, MAX_ENEMIES
+US_Max:
+    mov maxEnemies, al
+    popad
+    ret
+UpdateScore ENDP
+
+DrawGame PROC
+    pushad
+    mov eax, score
+    mov dl, 8
+    mov dh, 0
+    mov bl, white
+    call PrintNumAt
+    movzx eax, level
+    mov dl, 23
+    mov bl, white
+    call PrintNumAt
+    movzx eax, lives
+    mov dl, 35
+    mov bl, lightGreen
+    call PrintNumAt
+    mov eax, highScore
+    cmp eax, score
+    jae DG_HiOk
+    mov eax, score
+DG_HiOk:
+    mov dl, 46
+    mov bl, yellow
+    call PrintNumAt
+    mov dl, 54
+    mov dh, 0
+    mov bl, yellow
+    mov esi, OFFSET lblNoRapid
+    cmp rapidTimer, 0
+    je DG_Rapid
+    mov esi, OFFSET lblRapid
+DG_Rapid:
+    call PrintAt
+
+    mov esi, 0
+DG_B:
+    cmp esi, MAX_BULLETS
+    jae DG_E0
+    cmp bulletActive[esi], 0
+    je DG_BN
+    mov dl, bulletX[esi]
+    mov dh, bulletY[esi]
+    mov al, '|'
+    mov bl, yellow
+    call DrawCell
+DG_BN:
+    inc esi
+    jmp DG_B
+
+DG_E0:
+    mov esi, 0
+DG_E:
+    cmp esi, MAX_ENEMIES
+    jae DG_P
+    cmp enemyActive[esi], 0
+    je DG_EN
+    mov dl, enemyX[esi]
+    mov dh, enemyY[esi]
+    mov al, 'W'
+    mov bl, lightRed
+    cmp enemyType[esi], 2
+    jne DG_EDraw
+    mov al, '#'
+    mov bl, lightMagenta
+DG_EDraw:
+    call DrawCell
+DG_EN:
+    inc esi
+    jmp DG_E
+
+DG_P:
+    cmp powActive, 0
+    je DG_Ship
+    mov dl, powX
+    mov dh, powY
+    mov al, '+'
+    mov bl, lightGreen
+    cmp powType, 1
+    je DG_PDraw
+    mov al, 'R'
+    mov bl, lightCyan
+DG_PDraw:
+    call DrawCell
+
+DG_Ship:
+    mov bl, lightCyan
+    cmp hitTimer, 0
+    je DG_ShipDraw
+    mov bl, lightRed
+    dec hitTimer
+DG_ShipDraw:
+    mov dl, playerX
+    dec dl
+    mov dh, PLAYER_Y
+    mov esi, OFFSET shipStr
+    call PrintAt
+
+    mov dl, 0
+    mov dh, 24
+    call Gotoxy
+    popad
+    ret
+DrawGame ENDP
+
+GameOver PROC
+    mov eax, 700
+    call Delay
+GO_Flush:
+    call ReadKey
+    jnz GO_Flush
+
+    mov newHighFlag, 0
+    mov eax, score
+    cmp eax, highScore
+    jbe GO_NoHigh
+    mov highScore, eax
+    mov newHighFlag, 1
+GO_NoHigh:
+    call SavePlayerRecord
+
+    call Clrscr
+    SHOWLINE 2, 12, lightRed, g1
+    SHOWLINE 3, 12, lightRed, g2
+    SHOWLINE 4, 12, lightRed, g3
+    SHOWLINE 5, 12, lightRed, g4
+    SHOWLINE 6, 12, lightRed, g5
+    SHOWLINE 9, 25, white, goName
+    SHOWLINE 9, 39, yellow, playerName
+    SHOWLINE 10, 25, white, goScore
+    mov eax, score
+    mov dl, 39
+    mov dh, 10
+    mov bl, yellow
+    call PrintNumAt
+    SHOWLINE 11, 25, white, goHigh
+    mov eax, highScore
+    mov dl, 39
+    mov dh, 11
+    mov bl, yellow
+    call PrintNumAt
+    cmp newHighFlag, 0
+    je GO_Status
+    SHOWLINE 13, 28, lightGreen, goNewHigh
+GO_Status:
+    cmp saveStatus, 1
+    je GO_Err
+    cmp saveStatus, 2
+    je GO_Full
+    SHOWLINE 15, 25, gray, goSaved
+    jmp GO_Menu
+GO_Err:
+    SHOWLINE 15, 25, lightRed, goSaveErr
+    jmp GO_Menu
+GO_Full:
+    SHOWLINE 15, 25, lightRed, goFull
+GO_Menu:
+    SHOWLINE 18, 30, white, goOpt1
+    SHOWLINE 19, 30, white, goOpt2
+    SHOWLINE 20, 30, white, goOpt3
+GO_Input:
+    call ReadChar
+    cmp al, '1'
+    je GO_Again
+    cmp al, '2'
+    je GO_ToMenu
+    cmp al, '3'
+    je GO_Quit
+    jmp GO_Input
+GO_Again:
+    mov eax, 1
+    ret
+GO_ToMenu:
+    mov eax, 2
+    ret
+GO_Quit:
+    mov eax, 3
+    ret
+GameOver ENDP
+
+ParseMaxScore PROC
+    push ebx
+    push esi
+    push ecx
+    push edi
+    xor ebx, ebx
+    xor edi, edi
+    cmp ecx, 0
+    je PM_Done
+PM_Loop:
+    mov al, [esi]
+    cmp al, ' '
+    je PM_Space
+    cmp al, 10
+    je PM_EOL
+    cmp al, '0'
+    jb PM_Next
+    cmp al, '9'
+    ja PM_Next
+    sub al, '0'
+    movzx eax, al
+    imul ebx, ebx, 10
+    add ebx, eax
+    jmp PM_Next
+PM_Space:
+    xor ebx, ebx
+    jmp PM_Next
+PM_EOL:
+    cmp ebx, edi
+    jbe PM_Reset
+    mov edi, ebx
+PM_Reset:
+    xor ebx, ebx
+PM_Next:
+    inc esi
+    loop PM_Loop
+PM_Done:
+    mov eax, edi
+    pop edi
+    pop ecx
+    pop esi
+    pop ebx
+    ret
+ParseMaxScore ENDP
+
+LoadHighScore PROC
+    pushad
+    mov highScore, 0
+    mov edx, OFFSET fileName
+    call OpenInputFile
+    cmp eax, INVALID_HANDLE_VALUE
+    je LHS_Done
+    mov fileHandle, eax
+    mov edx, OFFSET fileBuffer
+    mov ecx, FILE_BUF_SIZE-1
+    call ReadFromFile
+    jc LHS_Close
+    mov esi, OFFSET fileBuffer
+    mov ecx, eax
+    call ParseMaxScore
+    mov highScore, eax
+LHS_Close:
+    mov eax, fileHandle
+    call CloseFile
+    mov fileHandle, 0
+LHS_Done:
+    popad
+    ret
+LoadHighScore ENDP
+
+SavePlayerRecord PROC
+    pushad
+    mov saveStatus, 0
+    mov bytesRead, 0
+    mov edx, OFFSET fileName
+    call OpenInputFile
+    cmp eax, INVALID_HANDLE_VALUE
+    je SPR_Build
+    mov fileHandle, eax
+    mov edx, OFFSET fileBuffer
+    mov ecx, FILE_BUF_SIZE
+    call ReadFromFile
+    jc SPR_ReadErr
+    mov bytesRead, eax
+    mov eax, fileHandle
+    call CloseFile
+    mov fileHandle, 0
+    cmp bytesRead, FILE_BUF_SIZE-64
+    ja SPR_Full
+    jmp SPR_Build
+SPR_ReadErr:
+    mov eax, fileHandle
+    call CloseFile
+    mov fileHandle, 0
+    mov saveStatus, 1
+    jmp SPR_Done
+SPR_Full:
+    mov saveStatus, 2
+    jmp SPR_Done
+
+SPR_Build:
+    mov edi, OFFSET fileBuffer
+    add edi, bytesRead
+    mov esi, OFFSET playerName
+SPR_Name:
+    mov al, [esi]
+    cmp al, 0
+    je SPR_NameDone
+    mov [edi], al
+    inc esi
+    inc edi
+    jmp SPR_Name
+SPR_NameDone:
+    mov BYTE PTR [edi], ' '
+    inc edi
+    mov eax, score
+    mov ebx, 10
+    xor ecx, ecx
+SPR_Div:
+    xor edx, edx
+    div ebx
+    push edx
+    inc ecx
+    cmp eax, 0
+    jne SPR_Div
+SPR_Pop:
+    pop edx
+    add dl, '0'
+    mov [edi], dl
+    inc edi
+    loop SPR_Pop
+    mov BYTE PTR [edi], 13
+    mov BYTE PTR [edi+1], 10
+    add edi, 2
+    mov eax, edi
+    sub eax, OFFSET fileBuffer
+    mov totalLen, eax
+
+    mov edx, OFFSET fileName
+    call CreateOutputFile
+    cmp eax, INVALID_HANDLE_VALUE
+    jne SPR_Write
+    mov saveStatus, 1
+    jmp SPR_Done
+SPR_Write:
+    mov fileHandle, eax
+    mov edx, OFFSET fileBuffer
+    mov ecx, totalLen
+    call WriteToFile
+    cmp eax, totalLen
+    je SPR_Close
+    mov saveStatus, 1
+SPR_Close:
+    mov eax, fileHandle
+    call CloseFile
+    mov fileHandle, 0
+SPR_Done:
+    popad
+    ret
+SavePlayerRecord ENDP
+
+DisplayHighScores PROC
+    pushad
+    call Clrscr
+    SHOWLINE 1, 25, yellow, hsTitle
+    mov bytesRead, 0
+    mov edx, OFFSET fileName
+    call OpenInputFile
+    cmp eax, INVALID_HANDLE_VALUE
+    je HS_None
+    mov fileHandle, eax
+    mov edx, OFFSET fileBuffer
+    mov ecx, FILE_BUF_SIZE-1
+    call ReadFromFile
+    jc HS_ReadErr
+    mov bytesRead, eax
+    mov eax, fileHandle
+    call CloseFile
+    mov fileHandle, 0
+    cmp bytesRead, 0
+    je HS_None
+
+    mov esi, OFFSET fileBuffer
+    add esi, bytesRead
+    mov BYTE PTR [esi], 0
+
+    SHOWLINE 3, 10, yellow, hsHighest
+    mov eax, highScore
+    mov dl, 25
+    mov dh, 3
+    mov bl, yellow
+    call PrintNumAt
+    SHOWLINE 5, 10, lightCyan, hsHead
+
+    mov esi, OFFSET fileBuffer
+    add esi, bytesRead
+    xor ecx, ecx
+HS_Back:
+    cmp esi, OFFSET fileBuffer
+    je HS_Print
+    dec esi
+    cmp BYTE PTR [esi], 10
+    jne HS_Back
+    inc ecx
+    cmp ecx, SHOW_RECORDS+1
+    jne HS_Back
+    inc esi
+HS_Print:
+    mov dl, 10
+    mov dh, 7
+    call Gotoxy
+    mov eax, white
+    call SetTextColor
+    mov edx, esi
+    call WriteString
+    jmp HS_Wait
+
+HS_None:
+    SHOWLINE 5, 10, lightRed, hsNone
+    jmp HS_Wait
+HS_ReadErr:
+    mov eax, fileHandle
+    call CloseFile
+    mov fileHandle, 0
+    SHOWLINE 5, 10, lightRed, hsErr
+HS_Wait:
+    call Crlf
+    mov eax, lightGray
+    call SetTextColor
+    call WaitMsg
+    popad
+    ret
+DisplayHighScores ENDP
+
+CloseGameFiles PROC
+    push eax
+    cmp fileHandle, 0
+    je CGF_Done
+    mov eax, fileHandle
+    call CloseFile
+    mov fileHandle, 0
+CGF_Done:
+    pop eax
+    ret
+CloseGameFiles ENDP
+
+END main
